@@ -23,15 +23,50 @@ github://<org>/<repo>     a single repository
 
 | Key                | Default                  | Description                                          |
 |--------------------|--------------------------|------------------------------------------------------|
-| `token`            | `$GITHUB_TOKEN`          | GitHub token; omit for public repositories           |
+| `app_id`           |                          | GitHub App ID — enables App authentication           |
+| `private_key`      |                          | path to the App's private key (PEM)                  |
+| `private_key_pem`  |                          | the App's private key inline, alternative to a path  |
+| `installation_id`  | auto-discovered          | App installation id, if you want to pin it           |
+| `token`            | `$GITHUB_TOKEN`          | static token (PAT); ignored when `app_id` is set     |
 | `api_url`          | `https://api.github.com` | API base URL, for GitHub Enterprise Server           |
 | `cache_dir`        | throwaway temp dir       | persistent mirror cache, enables incremental fetches |
 | `include_forks`    | `true`                   | include forked repositories                          |
 | `include_archived` | `true`                   | include archived repositories                        |
 | `metadata`         | `true`                   | dump per-repo API metadata JSON                      |
 
-For private repositories, use a fine-grained PAT with **Contents: read** and
-**Metadata: read** (or a classic PAT with the `repo` scope).
+### GitHub App authentication (recommended for organizations)
+
+App credentials belong to the organization instead of a person: no yearly
+token expiry, revocable from the org settings, auditable, and scoped to
+read-only permissions. This is how commercial GitHub backup products
+authenticate. Setup:
+
+1. Org **Settings → Developer settings → GitHub Apps → New GitHub App**
+   - Name e.g. `plakar-backup`, any homepage URL, **disable Webhook**
+   - Repository permissions: **Contents: Read-only** and
+     **Metadata: Read-only** — nothing else
+2. After creation, note the **App ID** and **Generate a private key**
+   (downloads a `.pem` file)
+3. **Install App** on your organization, on *All repositories*
+4. Configure the source:
+
+```sh
+plakar source add myorg github://MY_ORG \
+    app_id=123456 \
+    private_key=/etc/plakar/plakar-backup.pem \
+    cache_dir=/var/cache/plakar-github
+```
+
+The connector generates a short-lived JWT from the key, exchanges it for
+an installation token (valid one hour) and refreshes it automatically
+during long backups. With App auth, the backed-up repository list is the
+exact set of repositories the installation grants access to.
+
+### Static token (PAT)
+
+For quick setups and personal accounts: a fine-grained PAT with
+**Contents: read** and **Metadata: read** (or a classic PAT with the
+`repo` scope), passed as `token=`. Omit entirely for public repositories.
 
 ## Usage
 

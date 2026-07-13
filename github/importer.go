@@ -53,6 +53,7 @@ type GithubImporter struct {
 	repo  string
 
 	token  string
+	app    *appAuth
 	apiURL string
 	origin string
 
@@ -124,6 +125,28 @@ func NewGithubImporter(ctx context.Context, opts *connectors.Options, name strin
 		return nil, err
 	}
 
+	client := &http.Client{Timeout: 5 * time.Minute}
+
+	var app *appAuth
+	if appID := config["app_id"]; appID != "" {
+		pemData := config["private_key_pem"]
+		if pemData == "" {
+			path := config["private_key"]
+			if path == "" {
+				return nil, fmt.Errorf("app_id given but no private_key (path) or private_key_pem")
+			}
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				return nil, fmt.Errorf("reading private_key: %w", err)
+			}
+			pemData = string(raw)
+		}
+		app, err = newAppAuth(appID, config["installation_id"], pemData, apiURL, owner, client)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	cacheDir := config["cache_dir"]
 	keepCache := cacheDir != ""
 	if cacheDir == "" {
@@ -142,6 +165,7 @@ func NewGithubImporter(ctx context.Context, opts *connectors.Options, name strin
 		owner:           owner,
 		repo:            repo,
 		token:           token,
+		app:             app,
 		apiURL:          apiURL,
 		origin:          origin,
 		cacheDir:        cacheDir,
@@ -149,8 +173,19 @@ func NewGithubImporter(ctx context.Context, opts *connectors.Options, name strin
 		includeForks:    includeForks,
 		includeArchived: includeArchived,
 		withMetadata:    withMetadata,
-		client:          &http.Client{Timeout: 5 * time.Minute},
+		client:          client,
 	}, nil
+}
+
+// bearer returns the credential to authenticate API calls and git
+// operations: the App installation token (refreshed as needed) when App
+// auth is configured, the static token otherwise, or "" for anonymous
+// access to public repositories.
+func (g *GithubImporter) bearer(ctx context.Context) (string, error) {
+	if g.app != nil {
+		return g.app.currentToken(ctx)
+	}
+	return g.token, nil
 }
 
 func (g *GithubImporter) Root() string          { return "/" }
@@ -159,6 +194,10 @@ func (g *GithubImporter) Type() string          { return "github" }
 func (g *GithubImporter) Flags() location.Flags { return 0 }
 
 func (g *GithubImporter) Ping(ctx context.Context) error {
+	if g.app != nil {
+		_, err := g.apiRequest(ctx, "/installation/repositories?per_page=1")
+		return err
+	}
 	if g.repo != "" {
 		_, err := g.apiRequest(ctx, "/repos/"+url.PathEscape(g.owner)+"/"+url.PathEscape(g.repo))
 		return err
@@ -318,8 +357,10 @@ func (g *GithubImporter) backupRepository(ctx context.Context, repo *Repository,
 // entry is discarded and cloned from scratch.
 func (g *GithubImporter) mirror(ctx context.Context, repo *Repository, dest string) error {
 	var auth transport.AuthMethod
-	if g.token != "" {
-		auth = &githttp.BasicAuth{Username: "git", Password: g.token}
+	if cred, err := g.bearer(ctx); err != nil {
+		return err
+	} else if cred != "" {
+		auth = &githttp.BasicAuth{Username: "x-access-token", Password: cred}
 	}
 
 	if _, err := os.Stat(dest); err == nil {

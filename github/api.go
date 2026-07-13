@@ -33,8 +33,10 @@ func (g *GithubImporter) apiRequest(ctx context.Context, path string) ([]byte, e
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	if g.token != "" {
-		req.Header.Set("Authorization", "Bearer "+g.token)
+	if cred, err := g.bearer(ctx); err != nil {
+		return nil, err
+	} else if cred != "" {
+		req.Header.Set("Authorization", "Bearer "+cred)
 	}
 
 	resp, err := g.client.Do(req)
@@ -87,12 +89,23 @@ func (g *GithubImporter) listRepos(ctx context.Context) ([]*Repository, error) {
 		return []*Repository{repo}, nil
 	}
 
-	all, err := g.paginate(ctx, "/orgs/"+url.PathEscape(g.owner)+"/repos?type=all&per_page=100&page=")
-	if err != nil {
-		var userErr error
-		all, userErr = g.paginate(ctx, "/users/"+url.PathEscape(g.owner)+"/repos?type=all&per_page=100&page=")
-		if userErr != nil {
+	var all []*Repository
+	var err error
+	if g.app != nil {
+		// installation tokens list exactly the repositories the App
+		// installation was granted access to
+		all, err = g.paginateInstallation(ctx)
+		if err != nil {
 			return nil, err
+		}
+	} else {
+		all, err = g.paginate(ctx, "/orgs/"+url.PathEscape(g.owner)+"/repos?type=all&per_page=100&page=")
+		if err != nil {
+			var userErr error
+			all, userErr = g.paginate(ctx, "/users/"+url.PathEscape(g.owner)+"/repos?type=all&per_page=100&page=")
+			if userErr != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -107,6 +120,34 @@ func (g *GithubImporter) listRepos(ctx context.Context) ([]*Repository, error) {
 		filtered = append(filtered, repo)
 	}
 	return filtered, nil
+}
+
+func (g *GithubImporter) paginateInstallation(ctx context.Context) ([]*Repository, error) {
+	var all []*Repository
+	for page := 1; ; page++ {
+		data, err := g.apiRequest(ctx, "/installation/repositories?per_page=100&page="+strconv.Itoa(page))
+		if err != nil {
+			return nil, err
+		}
+		var wrapper struct {
+			Repositories []json.RawMessage `json:"repositories"`
+		}
+		if err := json.Unmarshal(data, &wrapper); err != nil {
+			return nil, err
+		}
+		for _, raw := range wrapper.Repositories {
+			repo := &Repository{}
+			if err := json.Unmarshal(raw, repo); err != nil {
+				return nil, err
+			}
+			repo.raw = raw
+			all = append(all, repo)
+		}
+		if len(wrapper.Repositories) < 100 {
+			break
+		}
+	}
+	return all, nil
 }
 
 func (g *GithubImporter) paginate(ctx context.Context, endpoint string) ([]*Repository, error) {
