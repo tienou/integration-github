@@ -7,7 +7,7 @@ VERSION	= v0.1.0
 all: build
 
 build:
-	${GO} build -v -o github-importer${EXT} ./importer
+	CGO_ENABLED=0 ${GO} build -v -o github-importer${EXT} ./importer
 
 package: build
 	rm -f github_${VERSION}_*.ptar
