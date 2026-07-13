@@ -1,0 +1,12 @@
+name: github
+display_name: GitHub
+description: Back up GitHub organizations and repositories as bare git mirrors
+homepage: https://github.com/tienou/integration-github
+license: ISC
+tags: [backup, github, git]
+api_version: v1
+connectors:
+  - type: importer
+    class: source
+    protocols: [github]
+    executable: ./github-importer
